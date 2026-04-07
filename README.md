@@ -1,4 +1,4 @@
-# Практика 6
+# Практика 5
 ## Выполнил: Студент ЭФМО-02-25 Фомичев Александр Сергеевич
 ### Структура:
 ```
@@ -14,7 +14,6 @@ deploy
         key.pem 
 services 
     auth
-        Dockerfile
         cmd
             auth
                 main.go
@@ -40,7 +39,6 @@ services
                 client.go
             http
                 middleware
-                    csrf.go
                     metrics.go
                 handlers
                     tasks.go
@@ -54,7 +52,6 @@ shared
         logger
             logger.go 
     middleware
-        security.go
         requestid.go
         accesslog.go
         grpclog.go
@@ -73,42 +70,97 @@ README.md
 go.mod
 go.sum
 ```
-## Какие cookies используются и какие флаги установлены.
+## Краткое описание, какой вариант TLS выбран.
+Выбран вариант 1: TLS-терминация на NGINX.
 
-1)cookies: session, со значением: demo-token, с флагами: HttpOnly, Secure, SameSite=Lax, Path=/, MaxAge=3600
-2)cookies: csrf_token, со значением	случайная строка (hex, 16 байт), с флагами:	Secure, SameSite=Lax, Path=/, MaxAge=3600 (без HttpOnly)
+Причины выбора:
+  Ближе к промышленной практике (разделение ответственности).
+  Управление сертификатами вынесено из кода приложения.
+  NGINX выступает как reverse proxy, что позволяет легко добавлять балансировку, кэширование и дополнительные проверки.
+  Приложение (сервис tasks) остаётся на HTTP, что упрощает его тестирование и отладку.
 
-## Какой CSRF подход выбран и как он работает.
+## Команды генерации сертификата.
 
-выбран подход Double Submit Cookie
+cd deploy/tls
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "//CN=localhost"
 
-**Принцип:**
+## Конфигурация NGINX.
+events {}
+```
+http {
+    server {
+        listen 8443 ssl;
+        server_name localhost;
 
-1)Клиент получает csrf_token в cookie при логине.
-2)Для всех state-changing запросов (POST, PATCH, DELETE) клиент обязан добавить заголовок X-CSRF-Token с тем же значением, что и в cookie.
-3)Сервер (Tasks service) сравнивает значение из cookie и заголовка. Если не совпадают или отсутствуют → 403 Forbidden.
+        ssl_certificate /etc/nginx/tls/cert.pem;
+        ssl_certificate_key /etc/nginx/tls/key.pem;
 
-**Реализация:**
+        location / {
+            proxy_pass http://tasks:8082;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Request-ID $http_x_request_id;
+            proxy_set_header Authorization $http_authorization;
+        }
+    }
+}
+```
+## Описание БД.
+Использована PostgreSQL (контейнерная). Таблица tasks создаётся автоматически при первом запуске с помощью init.sql.
 
-Добавлен middleware CSRFMiddleware в services/tasks/internal/http/middleware/csrf.go.
-В routes.go все опасные методы обёрнуты этим middleware.
+id – уникальный идентификатор задачи (текстовый).
+title – заголовок (обязательное).
+description – описание.
+due_date – срок выполнения (строка).
+done – флаг выполнения.
+created_at – время создания (автоматически).
 
-## Примеры запросов:
+## Демонстрация SQLi:
+**как выглядел уязвимый запрос**
+```
+func (r *PostgresTaskRepo) SearchByTitleVulnerable(ctx context.Context, title string) ([]service.Task, error) {
+    query := fmt.Sprintf("SELECT ... FROM tasks WHERE title = '%s'", title)
+    rows, err := r.db.QueryContext(ctx, query)
+    // ...
+}
+```
+**как он исправлен параметризацией**
+```
+func (r *PostgresTaskRepo) SearchByTitle(ctx context.Context, title string) ([]service.Task, error) {
+    query := `SELECT id, title, description, due_date, done FROM tasks WHERE title = $1`
+    rows, err := r.db.QueryContext(ctx, query, title)   // title передаётся как параметр
+    // ...
+}
+```
+**пример проверки**.
+**![здесь должен быть рисунок, честно](image/5_1.png)**
+**![здесь должен быть рисунок, честно](image/5_2.png)**
+**![здесь должен быть рисунок, честно](image/5_3.png)**
+**![здесь должен быть рисунок, честно](image/5_4.png)**
+**![здесь должен быть рисунок, честно](image/5_5.png)**
+**![здесь должен быть рисунок, честно](image/5_6.png)**
 
-**login**
+## Инструкция запуска всего стенда.
 
-**![здесь должен быть рисунок, честно](image/6_1.png)**
+**Требования**
+  Установленные Docker Desktop (Windows) и Git Bash (или любой терминал).
+  Go (локально) – для запуска Auth сервиса.
+  Свободные порты: 8081 (Auth HTTP), 50051 (Auth gRPC), 8443 (NGINX), 5433 (PostgreSQL хост-порт, опционально).
 
-**cookies**
-
-**![здесь должен быть рисунок, честно](image/6_2.png)**
-
-POST без CSRF (403)
-POST с CSRF (201/200)
-
-4.	Что сделано для XSS (правило обработки description и/или заголовки безопасности).
-5.	Инструкция запуска (учитывая HTTPS из ПЗ 21).
-
-
-
-
+**Шаги**
+Клонировать репозиторий и перейти в корень проекта.
+Сгенерировать TLS-сертификаты.
+Запустить Auth сервис локально (так как он не контейнеризирован в этой части):
+```
+bash
+cd services/auth
+set AUTH_PORT=8081
+set AUTH_GRPC_PORT=50051
+go run ./cmd/auth
+```
+Запустить Docker Compose (в отдельном терминале):
+```
+bash
+cd deploy/tls
+docker-compose up -d
+```
