@@ -1,0 +1,20 @@
+FROM golang:1.25 AS builder
+
+WORKDIR /app
+
+# Копируем go.mod и go.sum из корня проекта (контекст сборки — корень)
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Копируем весь исходный код
+COPY . .
+
+# Собираем сервис tasks
+RUN CGO_ENABLED=0 GOOS=linux go build -o tasks ./services/tasks/cmd/tasks
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=builder /app/tasks .
+EXPOSE 8082
+CMD ["./tasks"]
