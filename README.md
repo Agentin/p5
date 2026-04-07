@@ -1,4 +1,4 @@
-# Практика 4
+# Практика 5
 ## Выполнил: Студент ЭФМО-02-25 Фомичев Александр Сергеевич
 ### Структура:
 ```
@@ -117,9 +117,21 @@ created_at – время создания (автоматически).
 
 ## Демонстрация SQLi:
 **как выглядел уязвимый запрос**
-
+```
+func (r *PostgresTaskRepo) SearchByTitleVulnerable(ctx context.Context, title string) ([]service.Task, error) {
+    query := fmt.Sprintf("SELECT ... FROM tasks WHERE title = '%s'", title)
+    rows, err := r.db.QueryContext(ctx, query)
+    // ...
+}
+```
 **как он исправлен параметризацией**
-
+```
+func (r *PostgresTaskRepo) SearchByTitle(ctx context.Context, title string) ([]service.Task, error) {
+    query := `SELECT id, title, description, due_date, done FROM tasks WHERE title = $1`
+    rows, err := r.db.QueryContext(ctx, query, title)   // title передаётся как параметр
+    // ...
+}
+```
 **пример проверки**.
 **![здесь должен быть рисунок, честно](image/5_1.png)**
 **![здесь должен быть рисунок, честно](image/5_2.png)**
